@@ -1,0 +1,690 @@
+--@name Stinger_MANPADS
+--@author Chivick
+--@shared
+--@include libs/MeshBuilder_2026.txt
+local MeshBuilder = require("libs/MeshBuilder_2026.txt")
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+local ObjUrl    = "https://raw.githubusercontent.com/Chivick-oficial/GMOD/main/stinger.obj"
+local SCALE     = Vector(0.4, 0.4, 0.4)
+local PART_NAME = "model_6"
+local BONE_NAME = "ValveBiped.Bip01_R_Hand"
+local WEAPON    = "weapon_rpg"
+
+local LocalPos = Vector(-1, -3, -1)
+local LocalAng = Angle(0, -60, -90)
+
+local HomingSpeed           = 4000
+local ExplodeDamage         = 18000
+local ExplodeRadius         = 450
+local AutoExplodeDist       = 120
+local MissileAutoRemoveTime = 25
+local CooldownTime          = 10.0
+local LockTime              = 0.4
+local SpriteScale           = 200
+local TurnRate              = 280
+local BulletModel           = "models/weapons/w_missile_closed.mdl"
+
+local AirVehicleClasses = {
+    "prop_vehicle_airboat",
+    "prop_vehicle_prisoner_pod",
+    "prop_vehicle_jeep",
+}
+local AirTargetModels = {
+    "models/props_phx/ww2bomb.mdl",
+    "models/props_phx/mk-82.mdl",
+    "models/props_phx/torpedo.mdl",
+    "models/props_phx/amraam.mdl",
+}
+
+-- ============================================================
+-- SERVER
+-- ============================================================
+if SERVER then
+
+    local _rockets        = {}
+    local _targetPosCache = {}
+    local _cooldown       = 0
+    local holo            = nil
+    local built           = false
+    local lastWep         = nil
+    local wepHidden       = false
+    local equipped        = false   --   ?
+
+    local _lastTargetCount = -1
+    local _lastTargetIds   = {}
+
+    local Settings_Weapon = {
+        flags              = 0x0100 + 0x0010 + 0x2000,
+        phong              = 1,
+        phongboost         = 8.0,
+        phongexponent      = 64,
+        phongfresnelranges = "0.4 0.5 1",
+    }
+    local mat = {
+        basetexture = "https://raw.githubusercontent.com/Chivick-oficial/GMOD/main/mtl_wpn_h1_fim_92_stinger_base.png",
+        bumpmap     = "https://raw.githubusercontent.com/Chivick-oficial/GMOD/main/mtl_wpn_h1_fim_92_stinger_base_normal.png",
+        options     = Settings_Weapon,
+    }
+
+    --   
+    local function attachToHand()
+        if not isValid(holo) or not isValid(owner()) then return end
+        local boneId = owner():lookupBone(BONE_NAME)
+        if not boneId then return end
+        holo:setParent(owner(), nil, boneId)
+        holo:setLocalPos(LocalPos)
+        holo:setLocalAngles(LocalAng)
+        holo:setNoDraw(false)
+        equipped = true
+    end
+
+    local function buildMesh()
+        if built then return end
+        built = true
+        local Builder = MeshBuilder(ObjUrl)
+        holo = Builder:build(
+            PART_NAME, Vector(0,0,0), Angle(0,0,0), SCALE,
+            nil, nil, Color(255,255,255,255), mat
+        )
+        Builder:apply()
+        --       
+        timer.create("stinger_wait_mesh", 0.5, 0, function()
+            if not isValid(holo) then return end
+            attachToHand()
+            timer.remove("stinger_wait_mesh")
+            --     
+            net.start("pickupState"); net.writeBool(true); net.send()
+            print("[Stinger] Ready on hand")
+        end)
+    end
+
+    buildMesh()
+
+    --    :   RPG   
+    hook.add("think", "stinger_weapon_check", function()
+        if not isValid(holo) or not isValid(owner()) then return end
+        local activeWep = owner():getActiveWeapon()
+        if activeWep == lastWep then return end
+        if wepHidden and isValid(lastWep) and lastWep:getClass() == WEAPON then
+            pcall(function() lastWep:setColor(Color(255,255,255,255)) end)
+            wepHidden = false
+        end
+        lastWep = activeWep
+        local isRpg = isValid(activeWep) and activeWep:getClass() == WEAPON
+        if isRpg then
+            attachToHand()
+            pcall(function()
+                activeWep:setColor(Color(255,255,255,0))
+                wepHidden = true
+            end)
+        else
+            --  RPG      
+            holo:setNoDraw(true)
+        end
+    end)
+
+    local function doExplode(pos)
+        for i = 1, 20 do
+            if not prop.canSpawn() then break end
+            local offset = Vector(
+                math.random(-30, 30),
+                math.random(-30, 30),
+                math.random(-10, 30)
+            )
+            local ent = prop.createSent(pos + offset, Angle(), "gmod_wire_explosive", true, {
+                damage      = ExplodeDamage,
+                radius      = ExplodeRadius,
+                removeafter = true,
+                Model       = "models/bull/gates/logic_nano.mdl"
+            })
+            if not isValid(ent) then continue end
+            ent._isSF = true
+            ent:setSolid(false)
+            ent:setNoDraw(true)
+            ent:getWirelink()["Detonate"] = 1
+        end
+    end
+
+    -- rast:   ,   ,   
+    local _borrowedThruster   = nil
+    local _thrusterOrigPos    = nil
+    local _thrusterOrigAng    = nil
+
+    local function findNearbyThruster()
+        local best, bestDist = nil, 200
+        local chipPos = chip():getPos()
+        for _, e in ipairs(find.byClass("gmod_wire_thruster", function(e)
+            return isValid(e) and e:getOwner() == owner()
+        end)) do
+            local d = chipPos:getDistance(e:getPos())
+            if d < bestDist then bestDist = d; best = e end
+        end
+        return best
+    end
+
+    local function returnThruster()
+        if not isValid(_borrowedThruster) then
+            _borrowedThruster = nil; return
+        end
+        -- ,  ,   
+        pcall(function() _borrowedThruster:getWirelink()["A"] = 0 end)
+        _borrowedThruster:setParent(nil)
+        _borrowedThruster:setPos(_thrusterOrigPos)
+        _borrowedThruster:setAngles(_thrusterOrigAng)
+        print("[Stinger] Thruster returned")
+        _borrowedThruster = nil
+        _thrusterOrigPos  = nil
+        _thrusterOrigAng  = nil
+    end
+
+    local function detonateRocket(rocket)
+        if not isValid(rocket) then return end
+        --     
+        local pos = rocket:getPos()
+        --    rast      
+        if isValid(_borrowedThruster) then
+            pcall(function() _borrowedThruster:getWirelink()["A"] = 0 end)
+            _borrowedThruster:setParent(nil)
+            _borrowedThruster:setPos(_thrusterOrigPos)
+            _borrowedThruster:setAngles(_thrusterOrigAng)
+            print("[Stinger] Thruster returned (pre-detonate)")
+            _borrowedThruster = nil
+            _thrusterOrigPos  = nil
+            _thrusterOrigAng  = nil
+        end
+        --      
+        if isValid(rocket._flightSnd) then rocket._flightSnd:stop() end
+        rocket:remove()
+        net.start("fxBoom"); net.writeVector(pos); net.send()
+        doExplode(pos)
+    end
+
+    local function spawnMissile(target, homingMode)
+        local startPos = isValid(holo) and holo:getPos()
+                         or (owner():getPos() + Vector(0, 0, 65))
+        local initDir
+        if homingMode and isValid(target) then
+            initDir = (target:obbCenterW() - startPos):getNormalized()
+        else
+            initDir = owner():getEyeAngles():getForward()
+        end
+
+        local missile = prop.create(startPos, initDir:getAngle(), BulletModel, false)
+        if not isValid(missile) then
+            print("[Stinger] prop.create failed!")
+            return
+        end
+
+        missile:setFrozen(true)
+        missile:enableGravity(false)
+        missile:setNocollideAll(true)
+        missile:setHealth(999999)
+
+        --  rast   
+        if not isValid(_borrowedThruster) then
+            local th = findNearbyThruster()
+            if isValid(th) then
+                _thrusterOrigPos  = th:getPos()
+                _thrusterOrigAng  = th:getAngles()
+                _borrowedThruster = th
+                --   
+                th:setParent(missile)
+                th:setLocalPos(Vector(-15, 0, 0))
+                th:setLocalAngles(Angle(0, 0, 0))
+                --  ( Force   input)
+                pcall(function() th:getWirelink()["A"] = 1 end)
+                print("[Stinger] Thruster borrowed and active")
+            else
+                print("[Stinger] No thruster found nearby (radius 200)")
+            end
+        end
+
+        --  
+        local snd = sound.create(missile, "thrusters/rocket04.wav")
+        if isValid(snd) then
+            snd:play(); snd:setVolume(10); snd:setPitch(100)
+            missile._flightSnd = snd
+        end
+
+        missile._dir    = initDir
+        missile._homing = homingMode
+        if homingMode and isValid(target) then
+            missile._target = target
+        end
+
+        local r = missile
+        timer.simple(MissileAutoRemoveTime, function()
+            if isValid(r) then detonateRocket(r) end
+        end)
+
+        table.insert(_rockets, missile)
+
+        chip():emitSound("weapons/rpg/rocketfire1.wav", 90, 100, 1)
+        net.start("fxMuzzle"); net.writeVector(startPos); net.writeVector(initDir); net.send()
+        net.start("missileSpawned"); net.writeEntity(missile); net.send()
+
+        print("[Stinger] Missile spawned, homing=" .. tostring(homingMode))
+    end
+
+    hook.add("think", "missileUpdate", function()
+        local dt = timer.frametime()
+        if dt <= 0 then return end
+
+        for i = #_rockets, 1, -1 do
+            local r = _rockets[i]
+            if not isValid(r) then table.remove(_rockets, i) continue end
+
+            local rPos   = r:getPos()
+            local moveBy = HomingSpeed * dt
+            local newPos = rPos + r._dir * moveBy
+
+            -- Trace   :  , rast, holo, owner
+            local th  = r._thruster
+            local tr = trace.line(rPos, newPos, function(e)
+                if e == r then return false end
+                if isValid(th) and e == th then return false end
+                if isValid(holo) and e == holo then return false end
+                if e == owner() then return false end
+                if e == chip() then return false end
+                return true
+            end, MASK.SOLID)
+
+            if tr.Hit then
+                detonateRocket(r); table.remove(_rockets, i); continue
+            end
+
+            if not r._homing or not isValid(r._target) then
+                r:setPos(newPos)
+                r:setAngles(r._dir:getAngle())
+                continue
+            end
+
+            local tPos = r._target:obbCenterW()
+            local dist = rPos:getDistance(tPos)
+
+            if dist < AutoExplodeDist then
+                detonateRocket(r); table.remove(_rockets, i); continue
+            end
+
+            local tId   = r._target:entIndex()
+            local prevP = _targetPosCache[tId]
+            local tVel  = Vector(0, 0, 0)
+            if prevP and dt > 0 then
+                tVel = (tPos - prevP) / dt
+            end
+            _targetPosCache[tId] = tPos
+
+            local interceptPos = tPos
+            for _ = 1, 12 do
+                local d = rPos:getDistance(interceptPos)
+                interceptPos = tPos + tVel * (d / HomingSpeed)
+            end
+
+            local wantDir = (interceptPos - rPos):getNormalized()
+            local cosA    = math.clamp(r._dir:dot(wantDir), -1, 1)
+            local angle   = math.deg(math.acos(cosA))
+
+            if angle > 0.01 then
+                local t  = math.min((TurnRate * dt) / angle, 1)
+                r._dir   = (r._dir + (wantDir - r._dir) * t):getNormalized()
+            else
+                r._dir = wantDir
+            end
+
+            r:setPos(rPos + r._dir * moveBy)
+            r:setAngles(r._dir:getAngle())
+        end
+    end)
+
+    hook.add("EntityRemoved", "stinger_cacheClean", function(ent)
+        if ent then _targetPosCache[ent:entIndex()] = nil end
+    end)
+
+    local function targetsChanged(ents)
+        if #ents ~= _lastTargetCount then return true end
+        for i, e in ipairs(ents) do
+            if not isValid(e) or e:entIndex() ~= _lastTargetIds[i] then return true end
+        end
+        return false
+    end
+
+    timer.create("syncTargets", 1.2, 0, function()
+        local ents = {}
+        for _, cls in ipairs(AirVehicleClasses) do
+            for _, e in ipairs(find.byClass(cls, function(e) return isValid(e) end)) do
+                table.insert(ents, e)
+            end
+        end
+        for _, mdl in ipairs(AirTargetModels) do
+            for _, e in ipairs(find.byModel(mdl, function(e)
+                return isValid(e) and not e._isSF
+            end)) do
+                table.insert(ents, e)
+            end
+        end
+        for _, e in ipairs(find.byClass("gmod_wire_explosive", function(e)
+            return isValid(e) and not e._isSF
+        end)) do table.insert(ents, e) end
+
+        if not targetsChanged(ents) then return end
+
+        _lastTargetCount = #ents
+        _lastTargetIds   = {}
+        for i, e in ipairs(ents) do
+            _lastTargetIds[i] = isValid(e) and e:entIndex() or 0
+        end
+
+        net.start("targetList"); net.writeTable(ents); net.send()
+    end)
+
+    net.receive("reqFire", function(len, ply)
+        if ply ~= owner() then return end
+        local now = timer.curtime()
+        if now < _cooldown then
+            print("[Stinger] Still on cooldown: " .. string.format("%.1f", _cooldown - now) .. "s")
+            return
+        end
+        local hasTarget = net.readBool()
+        local target    = hasTarget and net.readEntity() or nil
+        local homing    = net.readBool()
+        spawnMissile(target, homing)
+        _cooldown = now + CooldownTime
+        net.start("cooldownState"); net.writeFloat(_cooldown); net.send()
+    end)
+
+    hook.add("ClientInitialized", "initCl_stinger", function(ply)
+        net.start("srvReady"); net.send(ply)
+        timer.simple(0.3, function()
+            net.start("cooldownState"); net.writeFloat(_cooldown); net.send(ply)
+            --     
+            net.start("pickupState"); net.writeBool(true); net.send(ply)
+        end)
+    end)
+
+end
+
+-- ============================================================
+-- CLIENT
+-- ============================================================
+if SERVER then return end
+if player() ~= owner() then return end
+enableHud(owner(), true)
+
+local _p           = player()
+local _targets     = {}
+local _homingMode  = true
+local _cooldownEnd = 0
+local _lockTarget  = nil
+local _lockStart   = nil
+local _fired       = false
+local _isPickedUp  = false   --   true  srvReady
+
+local _mFire, _mSmoke, fntHUD
+
+--   
+local _shellSpriteMat = nil
+do
+    local srcMat = material.load("sprites/orangeflare1")
+    local tex    = srcMat:getTexture("$basetexture")
+    _shellSpriteMat = material.create("UnlitGeneric")
+    _shellSpriteMat:setTexture("$basetexture", tex)
+    _shellSpriteMat:setInt("$additive", 1)
+    _shellSpriteMat:setInt("$flags", 128)
+end
+
+local _bulletHolos = {}
+
+hook.add("renderoffscreen", "stinger_init", function()
+    if _mFire then return end
+    _mFire = material.load("particles/flamelet5")
+    _mSmoke = material.load("particle/smokesprites_0004")
+    fntHUD = render.createFont("Verdana", 14, 700, true)
+    hook.remove("renderoffscreen", "stinger_init")
+end)
+
+local function spawnBoomFX(pos)
+    if not _mFire then return end
+    local em = particle.create(Vector(), false)
+    for i = 1, 12 do
+        local d = Vector(math.rand(-1,1), math.rand(-1,1), math.rand(0,1)):getNormalized()
+        local p = em:add(_mFire, pos+d*25, 65, 550, 0, 0, 210, 0, 0.6)
+        if p then p:setVelocity(d*750) p:setAirResistance(70) p:setCollide(true) end
+    end
+    for i = 1, 8 do
+        local d = Vector(math.rand(-1,1), math.rand(-1,1), math.rand(0.2,1)):getNormalized()
+        local p = em:add(_mSmoke, pos+d*15, 65, 480, 0, 0, 170, 0, 2.2)
+        if p then p:setVelocity(d*300) p:setAirResistance(55) p:setColor(Color(20,20,20)) end
+    end
+    em:destroy()
+end
+
+local function spawnMuzzleFX(pos, dir)
+    if not _mFire then return end
+    local em = particle.create(Vector(), false)
+    for i = 1, 10 do
+        local sp = Vector(math.random()*0.5-0.25, math.random()*0.5-0.25, 0)
+        local p  = em:add(_mFire, pos, 120, 0, 0, 0, 255, 200, 0.12)
+        if p then p:setVelocity((dir+sp):getNormalized()*500) p:setAirResistance(250) end
+    end
+    for i = 1, 8 do
+        local sp = Vector(math.random()*0.3-0.15, math.random()*0.3-0.15, 0)
+        local p  = em:add(_mSmoke, pos+dir*14, 55, 160, 0, 0, 30, 0, 1.6)
+        if p then p:setVelocity((dir+sp):getNormalized()*130) p:setAirResistance(55) end
+    end
+    em:destroy()
+end
+
+net.receive("srvReady",      function() _isPickedUp = true end)
+net.receive("fxBoom",        function() spawnBoomFX(net.readVector()) end)
+net.receive("fxMuzzle",      function() spawnMuzzleFX(net.readVector(), net.readVector()) end)
+net.receive("targetList",    function() _targets = net.readTable() end)
+net.receive("cooldownState", function() _cooldownEnd = net.readFloat() end)
+net.receive("pickupState",   function() _isPickedUp = net.readBool() end)
+
+--    (      thruster  smoke  )
+net.receive("missileSpawned", function()
+    local missile = net.readEntity()
+    timer.simple(0.05, function()
+        if not isValid(missile) then return end
+        local h = holograms.create(missile:getPos(), Angle(0,0,0),
+                    "models/holograms/plane.mdl", Vector(1,1,1))
+        if isValid(h) then
+            h:setMaterial("!" .. _shellSpriteMat:getName())
+            h:setSize(Vector(SpriteScale, SpriteScale, 1))
+            h:setRenderMode(5)
+            h:setParent(missile)
+        end
+        table.insert(_bulletHolos, {holo = h, bullet = missile})
+    end)
+end)
+
+--        
+hook.add("think", "stinger_sprites", function()
+    local eyePos = _p:getEyePos()
+    for i = #_bulletHolos, 1, -1 do
+        local e = _bulletHolos[i]
+        if not isValid(e.bullet) then
+            if isValid(e.holo) then e.holo:remove() end
+            table.remove(_bulletHolos, i)
+        else
+            if isValid(e.holo) then
+                local d   = (eyePos - e.holo:getPos()):getNormalized()
+                local ang = d:getAngle() + Angle(90, 0, 0)
+                ang:setP(90)
+                e.holo:setAngles(ang)
+            end
+        end
+    end
+end)
+
+hook.add("EntityRemoved", "stinger_clean", function(ent)
+    if ent == _lockTarget then
+        _lockTarget = nil; _lockStart = nil; _fired = false
+    end
+end)
+
+local LOCK_RADIUS = 180
+local function getTargetUnderCrosshair()
+    if not _p:isAlive() then return nil end
+    local sw, sh   = render.getGameResolution()
+    local cx, cy   = sw * 0.5, sh * 0.5
+    local best, bD = nil, LOCK_RADIUS
+    local allTargets = {}
+    for _, t in ipairs(_targets) do table.insert(allTargets, t) end
+    for _, e in ipairs(find.byClass("prop_vehicle_prisoner_pod",
+        function(e) return isValid(e) end)) do
+        table.insert(allTargets, e)
+    end
+    for _, e in ipairs(find.byClass("gmod_wire_explosive",
+        function(e) return isValid(e) and not e._isSF end)) do
+        table.insert(allTargets, e)
+    end
+    for _, t in ipairs(allTargets) do
+        if not isValid(t) then continue end
+        local s = t:obbCenterW():toScreen()
+        if not s.visible then continue end
+        if _p:getPos():getDistance(t:getPos()) > 25000 then continue end
+        local d = math.sqrt((s.x-cx)^2 + (s.y-cy)^2)
+        if d < bD then bD = d; best = t end
+    end
+    return best
+end
+
+hook.add("think", "stinger_lock_and_fire", function()
+    if not _p:isAlive() then return end
+    if not _isPickedUp then return end
+
+    local rmb = input.isMouseDown(MOUSE.MOUSE2)
+    if not rmb then
+        _lockTarget = nil; _lockStart = nil; _fired = false; return
+    end
+    if not _homingMode then return end
+    if timer.curtime() < _cooldownEnd then return end
+
+    local target = getTargetUnderCrosshair()
+    if not isValid(target) then
+        _lockTarget = nil; _lockStart = nil; _fired = false; return
+    end
+
+    if _lockTarget ~= target then
+        _lockTarget = target
+        _lockStart  = timer.curtime()
+        _fired      = false
+        _p:emitSound("buttons/button10.wav", 60, 100, 0.5)
+        return
+    end
+
+    if _fired then return end
+    if timer.curtime() - _lockStart < LockTime then return end
+
+    _fired = true
+    net.start("reqFire")
+    net.writeBool(true)
+    net.writeEntity(_lockTarget)
+    net.writeBool(true)
+    net.send()
+    _p:emitSound("buttons/button17.wav", 70, 120, 0.8)
+    _cooldownEnd = timer.curtime() + CooldownTime
+    _lockTarget  = nil; _lockStart = nil; _fired = false
+end)
+
+hook.add("inputPressed", "stinger_input", function(key)
+    if not _p:isAlive() then return end
+    if not _isPickedUp then return end
+
+    if key == KEY.F and not _homingMode then
+        if timer.curtime() < _cooldownEnd then return end
+        net.start("reqFire")
+        net.writeBool(false)
+        net.writeEntity(game.getWorld())
+        net.writeBool(false)
+        net.send()
+        _cooldownEnd = timer.curtime() + CooldownTime
+        return
+    end
+
+    if key == MOUSE.MOUSE3 then
+        _homingMode = not _homingMode
+        _lockTarget = nil; _lockStart = nil; _fired = false
+        _p:emitSound(
+            _homingMode and "buttons/button14.wav" or "buttons/button10.wav",
+            70, 110, 0.8)
+    end
+end)
+
+-- ============================================================
+-- HUD
+-- ============================================================
+local function drawCornerBox(cx, cy, hw, alpha)
+    local x1,y1 = cx-hw, cy-hw
+    local x2,y2 = cx+hw, cy+hw
+    local t, l  = 2, math.floor(hw*0.45)
+    render.setColor(Color(255,255,255,alpha))
+    render.drawRect(x1,   y1,   t, l) render.drawRect(x1,   y1,   l, t)
+    render.drawRect(x2-t, y2-l, t, l) render.drawRect(x2-l, y2-t, l, t)
+    render.drawRect(x2-t, y1,   t, l) render.drawRect(x2-l, y1,   l, t)
+    render.drawRect(x1,   y2-l, t, l) render.drawRect(x1,   y2-t, l, t)
+end
+
+hook.add("DrawHUD", "stinger_hud", function()
+    if not _p:isAlive() or not fntHUD then return end
+    local sw, sh = render.getGameResolution()
+    local cx, cy = math.floor(sw*0.5), math.floor(sh*0.5)
+    local now    = timer.curtime()
+
+    if not _isPickedUp then return end
+
+    local cd    = math.max(_cooldownEnd - now, 0)
+    local ready = cd <= 0
+
+    render.setColor(Color(255,255,255, ready and 255 or 80))
+    local g, L, t2 = 7, 14, 2
+    render.drawRect(cx-g-L, cy-t2,  L,  t2)
+    render.drawRect(cx+g,   cy-t2,  L,  t2)
+    render.drawRect(cx-t2,  cy-g-L, t2, L)
+    render.drawRect(cx-t2,  cy+g,   t2, L)
+    render.drawRect(cx-1,   cy-1,   3,  3)
+
+    if _homingMode and isValid(_lockTarget) then
+        local s = _lockTarget:obbCenterW():toScreen()
+        if s.visible then
+            local prog  = math.clamp((now - _lockStart) / LockTime, 0, 1)
+            local hw    = 32
+            local alpha = prog >= 1
+                and math.floor((math.sin(now*20)*0.5+0.5)*200+55)
+                or  math.floor(80 + prog*175)
+            drawCornerBox(s.x, s.y, hw, alpha)
+
+            local bw = 64
+            render.setColor(Color(60,60,60,180))
+            render.drawRect(s.x-bw/2, s.y+hw+8, bw, 3)
+            render.setColor(Color(255,255,255,220))
+            render.drawRect(s.x-bw/2, s.y+hw+8, math.floor(bw*prog), 3)
+
+            render.setFont(fntHUD)
+            render.setColor(Color(255,255,255,200))
+            render.drawText(s.x, s.y-hw-16, prog>=1 and "LOCKED" or "LOCKING", 1)
+        end
+    end
+
+    local barY = sh - 22
+    render.setFont(fntHUD)
+    render.setColor(Color(0,0,0,160))
+    render.drawRect(cx-140, barY-4, 280, 22)
+    render.setColor(Color(255,255,255,40))
+    render.drawRect(cx-1, barY-2, 1, 18)
+    render.setColor(Color(255,255,255,255))
+    render.drawText(cx-50, barY, _homingMode and "HOMING" or "DIRECT", 1)
+    render.setColor(Color(255,255,255, ready and 255 or 120))
+    render.drawText(cx+70, barY, ready and "READY" or string.format("CD  %.1f", cd), 1)
+
+    render.setColor(Color(255,255,255,50))
+    if _homingMode then
+        render.drawText(cx, sh-42, "RMB hold on target: fire  |  M3: mode", 1)
+    else
+        render.drawText(cx, sh-42, "F: fire  |  M3: mode", 1)
+    end
+end)

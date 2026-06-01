@@ -1,0 +1,33 @@
+# Blender 5.1.2 MTL File: 'None'
+# www.blender.org
+
+newmtl CHASSIS.01_-_Default
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/Art/nvovrlrd.dds
+map_Bump -bm 10.000000 C:/Users/fedab/Downloads/nvovrlrd_specular (3).png
+
+newmtl GATTBOXES01.09_-_Default
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/Art/ntgattling.dds
+
+newmtl HOUSECOLOR02.03_-_Default
+Ns 1000.000000
+Ka 1.000000 1.000000 1.000000
+Kd 1.000000 0.000000 0.004235
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 1

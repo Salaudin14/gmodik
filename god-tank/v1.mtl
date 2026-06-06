@@ -1,0 +1,32 @@
+# Blender 5.1.2 MTL File: 'None'
+# www.blender.org
+
+newmtl BOB.Mtl_#10
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd.dds
+
+newmtl HANK.08_-_Default
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 1
+map_Kd C:/Users/fedab/Downloads/allahs2/W3D Viewer/modstuff/NVEmperor.dds
+
+newmtl SPEAKER01.Overlord_Tank_-_Upgrades
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds

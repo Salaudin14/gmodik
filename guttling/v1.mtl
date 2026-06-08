@@ -1,0 +1,52 @@
+# Blender 5.1.2 MTL File: 'None'
+# www.blender.org
+
+newmtl BARREL01.Overlord_Tank_-_Upgrades
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
+
+newmtl BARREL02.Overlord_Tank_-_Upgrades
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
+
+newmtl HOUSECOLORUP01.House_color
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/housecolor2.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/housecolor2.dds
+
+newmtl HOUSECOLORUP02.House_color
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/housecolor2.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/housecolor2.dds
+
+newmtl TURRETEL.Overlord_Tank_-_Upgrades
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+illum 1
+map_Kd C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
+map_d C:/Users/fedab/Downloads/8ad gun tank/all/Art/Textures/nvovrlrd_u.dds
